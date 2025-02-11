@@ -1,0 +1,8 @@
+.env
+.vscode
+*.html
+
+gin-bin
+
+docker
+uploads

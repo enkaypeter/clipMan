@@ -1,0 +1,19 @@
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: clipMan_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${DB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${DB_NAME}
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./docker/mongodb_data:/data/db
+      - ./docker/mongo_logs:/var/log/mongodb
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
