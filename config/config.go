@@ -11,6 +11,7 @@ type Config struct {
 	MongoURI string
 	MongoDB  string
 	JWTSecret string
+	PORT string
 }
 
 type CollectionName string
@@ -36,6 +37,7 @@ func LoadConfig() {
 		MongoURI: getEnv("MONGO_URI", "mongodb://localhost:27017"),
 		MongoDB:  getEnv("MONGO_DB", "clipboardDB"),
 		JWTSecret: getEnv("JWT_SECRET", ""),
+		PORT: getEnv("APP_PORT", "8080"),
 	}
 
 	log.Println("Environment variables loaded successfully")
