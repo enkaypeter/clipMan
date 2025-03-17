@@ -1,7 +1,18 @@
 services:
-  mongodb:
+  clipman-api:
+    build: .
+    container_name: clipman-api
+    ports:
+      - "8080:8080"
+    environment:
+      MONGO_URI: ${MONGO_URI}
+      MONGO_DB: ${DB_NAME}
+      JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      - clipman-db
+  clipman-db:
     image: mongo:latest
-    container_name: clipMan_mongodb
+    container_name: clipman-db
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${DB_ROOT_USERNAME}
