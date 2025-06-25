@@ -39,7 +39,7 @@ func CopyClipboard(c *gin.Context) {
     c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user data"})
     c.Abort()
     return
-}
+	}
 	_, fileHeader, err := c.Request.FormFile("file")
 	if err == nil && fileHeader != nil {
 		entry.Type = "file"
@@ -111,8 +111,8 @@ func PasteClipboard(c *gin.Context) {
 
 	filter := bson.D{{"user_id", authenticatedUser.ID}}
 
-	// Get total count for pagination
-	totalEntries, err := collection.CountDocuments(context.TODO(), filter)
+	requestCtx := c.Request.Context()
+	totalEntries, err := collection.CountDocuments(requestCtx, filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count entries"})
 		return
@@ -124,15 +124,15 @@ func PasteClipboard(c *gin.Context) {
 	findOptions.SetSkip(skip)
 	findOptions.SetLimit(limit)
 
-	cursor, err := collection.Find(context.TODO(), filter, findOptions)
+	cursor, err := collection.Find(requestCtx, filter, findOptions)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve entries"})
 		return
 	}
-	defer cursor.Close(context.TODO())
+	defer cursor.Close(requestCtx)
 
 	var entries []models.ClipboardEntry
-	if err = cursor.All(context.TODO(), &entries); err != nil {
+	if err = cursor.All(requestCtx, &entries); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode entries"})
 		return
 	}
