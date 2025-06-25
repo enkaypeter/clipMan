@@ -16,5 +16,8 @@ func SetupClipboardRoutes(r *gin.Engine) {
 			
 	private.POST("/clipboard", controllers.CopyClipboard)
 	private.GET("/clipboard", controllers.PasteClipboard)
+	private.GET("/clipboard/:id", controllers.GetClipboardEntryByID)
+	private.PATCH("/clipboard/:id", controllers.UpdateClipboardEntry)
+	private.DELETE("/clipboard/:id", controllers.DeleteClipboardEntry)
 	
 }
