@@ -8,7 +8,7 @@ import (
 
 )
 
-// SetupRoutes registers the API routes.
+// SetupClipboardRoutes registers the API routes.
 func SetupClipboardRoutes(r *gin.Engine) {
 
 	private := r.Group("/api")
