@@ -14,4 +14,5 @@ type ClipboardEntry struct {
 	Timestamp time.Time `json:"timestamp"`
 	Filepath  string    `json:"filepath,omitempty"`
 	UserId		primitive.ObjectID    `json:"user_id" bson:"user_id"`
+	Pinned    bool      `json:"pinned" bson:"pinned,omitempty"` // Added Pinned field
 }
