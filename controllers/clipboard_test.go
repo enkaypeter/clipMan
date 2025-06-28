@@ -167,7 +167,7 @@ func (suite *ClipboardTestSuite) TestCreateTextClip_Unauthorized() {
 }
 
 
-// --- Example: Test POST /api/clipboard - Create File Clip ---
+// Test POST /api/clipboard - Create File Clip
 func (suite *ClipboardTestSuite) TestCreateFileClip_Success() {
 	tempDir := suite.T().TempDir()
 	tempFilePath := filepath.Join(tempDir, "testfile.txt")
