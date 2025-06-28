@@ -26,8 +26,6 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		// Token format is "Bearer token", so we split the string
 		parts := strings.Split(tokenString, " ")
-		// log.Println(parts)
-		// os.Exit(0)
 		
 		if len(parts) != 2 || parts[0] != "Bearer" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token format"})

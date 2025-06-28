@@ -39,7 +39,7 @@ func CopyClipboard(c *gin.Context) {
     c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user data"})
     c.Abort()
     return
-	}
+}
 	_, fileHeader, err := c.Request.FormFile("file")
 	if err == nil && fileHeader != nil {
 		entry.Type = "file"
@@ -81,7 +81,6 @@ func CopyClipboard(c *gin.Context) {
 
 func PasteClipboard(c *gin.Context) {
 	userCtx, exists := c.Get("user")
-	requestCtx := c.Request.Context()
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
@@ -112,7 +111,8 @@ func PasteClipboard(c *gin.Context) {
 
 	filter := bson.D{{"user_id", authenticatedUser.ID}}
 
-	totalEntries, err := collection.CountDocuments(requestCtx, filter)
+	// Get total count for pagination
+	totalEntries, err := collection.CountDocuments(context.TODO(), filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count entries"})
 		return
@@ -124,21 +124,21 @@ func PasteClipboard(c *gin.Context) {
 	findOptions.SetSkip(skip)
 	findOptions.SetLimit(limit)
 
-	cursor, err := collection.Find(requestCtx, filter, findOptions)
+	cursor, err := collection.Find(context.TODO(), filter, findOptions)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve entries"})
 		return
 	}
-	defer cursor.Close(requestCtx)
+	defer cursor.Close(context.TODO())
 
 	var entries []models.ClipboardEntry
-	if err = cursor.All(requestCtx, &entries); err != nil {
+	if err = cursor.All(context.TODO(), &entries); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode entries"})
 		return
 	}
 
 	if entries == nil {
-		entries = []models.ClipboardEntry{} // Return empty array instead of null
+		entries = []models.ClipboardEntry{}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -154,8 +154,6 @@ func PasteClipboard(c *gin.Context) {
 
 func GetClipboardEntryByID(c *gin.Context) {
 	userCtx, exists := c.Get("user")
-	requestCtx := c.Request.Context()
-
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
@@ -179,7 +177,7 @@ func GetClipboardEntryByID(c *gin.Context) {
 
 	filter := bson.M{"_id": entryID, "user_id": authenticatedUser.ID}
 
-	err = collection.FindOne(requestCtx, filter).Decode(&entry)
+	err = collection.FindOne(context.TODO(), filter).Decode(&entry)
 	if err != nil {
 		if err.Error() == "mongo: no documents in result" { // TODO: check for specific error type
 			c.JSON(http.StatusNotFound, gin.H{"error": "Clipboard entry not found or access denied"})
@@ -192,16 +190,13 @@ func GetClipboardEntryByID(c *gin.Context) {
 	c.JSON(http.StatusOK, entry)
 }
 
-// UpdateClipboardEntryPayload defines the structure for the PATCH request body
 type UpdateClipboardEntryPayload struct {
 	Content *string `json:"content"`
 	Pinned  *bool   `json:"pinned"`
-	// Add other updatable fields here, e.g., metadata
 }
 
 func UpdateClipboardEntry(c *gin.Context) {
 	userCtx, exists := c.Get("user")
-	requestCtx := c.Request.Context()
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
@@ -237,7 +232,7 @@ func UpdateClipboardEntry(c *gin.Context) {
 
 	// First, verify the entry exists and belongs to the user
 	filter := bson.M{"_id": entryID, "user_id": authenticatedUser.ID}
-	err = collection.FindOne(requestCtx, filter).Decode(&currentEntry)
+	err = collection.FindOne(context.TODO(), filter).Decode(&currentEntry)
 	if err != nil {
 		if err.Error() == "mongo: no documents in result" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Clipboard entry not found or access denied"})
@@ -257,7 +252,6 @@ func UpdateClipboardEntry(c *gin.Context) {
 	updateFields := bson.M{}
 	if payload.Content != nil {
 		updateFields["content"] = *payload.Content
-		// If content is updated, also update the timestamp
 		updateFields["timestamp"] = time.Now()
 	}
 	if payload.Pinned != nil {
@@ -266,17 +260,15 @@ func UpdateClipboardEntry(c *gin.Context) {
 
 	update := bson.M{"$set": updateFields}
 
-	_, err = collection.UpdateOne(requestCtx, filter, update)
+	_, err = collection.UpdateOne(context.TODO(), filter, update)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update clipboard entry"})
 		return
 	}
 
-	// Fetch the updated entry to return it
 	var updatedEntry models.ClipboardEntry
-	err = collection.FindOne(requestCtx, filter).Decode(&updatedEntry)
+	err = collection.FindOne(context.TODO(), filter).Decode(&updatedEntry)
 	if err != nil {
-		// This should ideally not happen if the update was successful
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve updated entry"})
 		return
 	}
@@ -286,7 +278,6 @@ func UpdateClipboardEntry(c *gin.Context) {
 
 func DeleteClipboardEntry(c *gin.Context) {
 	userCtx, exists := c.Get("user")
-	requestCtx := c.Request.Context()
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
@@ -307,10 +298,9 @@ func DeleteClipboardEntry(c *gin.Context) {
 
 	collection := database.GetCollection(config.DB_Collection.Entries)
 
-	// Construct filter to ensure the entry belongs to the authenticated user
 	filter := bson.M{"_id": entryID, "user_id": authenticatedUser.ID}
 
-	result, err := collection.DeleteOne(requestCtx, filter)
+	result, err := collection.DeleteOne(context.TODO(), filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete clipboard entry"})
 		return
