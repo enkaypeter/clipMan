@@ -138,7 +138,7 @@ func PasteClipboard(c *gin.Context) {
 	}
 
 	if entries == nil {
-		entries = []models.ClipboardEntry{} // Return empty array instead of null
+		entries = []models.ClipboardEntry{}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -190,11 +190,9 @@ func GetClipboardEntryByID(c *gin.Context) {
 	c.JSON(http.StatusOK, entry)
 }
 
-// UpdateClipboardEntryPayload defines the structure for the PATCH request body
 type UpdateClipboardEntryPayload struct {
 	Content *string `json:"content"`
 	Pinned  *bool   `json:"pinned"`
-	// Add other updatable fields here, e.g., metadata
 }
 
 func UpdateClipboardEntry(c *gin.Context) {
@@ -254,7 +252,6 @@ func UpdateClipboardEntry(c *gin.Context) {
 	updateFields := bson.M{}
 	if payload.Content != nil {
 		updateFields["content"] = *payload.Content
-		// If content is updated, also update the timestamp
 		updateFields["timestamp"] = time.Now()
 	}
 	if payload.Pinned != nil {
@@ -269,11 +266,9 @@ func UpdateClipboardEntry(c *gin.Context) {
 		return
 	}
 
-	// Fetch the updated entry to return it
 	var updatedEntry models.ClipboardEntry
 	err = collection.FindOne(context.TODO(), filter).Decode(&updatedEntry)
 	if err != nil {
-		// This should ideally not happen if the update was successful
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve updated entry"})
 		return
 	}
@@ -303,7 +298,6 @@ func DeleteClipboardEntry(c *gin.Context) {
 
 	collection := database.GetCollection(config.DB_Collection.Entries)
 
-	// Construct filter to ensure the entry belongs to the authenticated user
 	filter := bson.M{"_id": entryID, "user_id": authenticatedUser.ID}
 
 	result, err := collection.DeleteOne(context.TODO(), filter)
