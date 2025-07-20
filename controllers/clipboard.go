@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,7 +10,9 @@ import (
 
 	"clipMan/config"
 	"clipMan/database"
+	"clipMan/dto/clipboard"
 	"clipMan/models"
+	"clipMan/utils/encryption"
 
 	"github.com/gin-gonic/gin"
 	"math"
@@ -20,9 +23,9 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-
+// TODO: implement services for clipboard operations
 func CopyClipboard(c *gin.Context) {
-
+	var incomingEntry dto.CreateClipboardEntry
 	var entry models.ClipboardEntry
 
 	user, exists := c.Get("user")
@@ -35,49 +38,89 @@ func CopyClipboard(c *gin.Context) {
 
 	authUser, ok := user.(*models.User)
 	if !ok {
-    log.Println("Error casting user from context")
-    c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user data"})
-    c.Abort()
-    return
-}
-	_, fileHeader, err := c.Request.FormFile("file")
-	if err == nil && fileHeader != nil {
-		entry.Type = "file"
-		entry.Filename = fileHeader.Filename
+		log.Println("Error casting user from context")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user data"})
+		c.Abort()
+		return
+	}
 
-		dst := fmt.Sprintf("./uploads/%s", fileHeader.Filename)
-		err := c.SaveUploadedFile(fileHeader, dst)
+	if handled, err := handleFileUpload(c, &entry); handled {
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		entry.Filepath = dst
-
 	} else {
-		if err := c.ShouldBindJSON(&entry); err != nil {
+		if err := c.ShouldBindJSON(&incomingEntry); err != nil {
 			log.Println("Error binding JSON:", err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		entry.Type = "text"
+		entry.Content = incomingEntry.Content
+		entry.Encrypted = incomingEntry.Encrypted
+		entry.EncryptionKey = incomingEntry.EncryptionKey
 	}
 
 	entry.Timestamp = time.Now()
 	entry.UserId = authUser.ID
 
-
 	collection := database.GetCollection(config.DB_Collection.Entries)
-	
+
+	if entry.Encrypted {
+		if err := handleEncryption(&entry, c); err != nil {
+			return
+		}
+	}
+
 	res, err := collection.InsertOne(context.TODO(), entry)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-
 	c.JSON(http.StatusCreated, gin.H{"id": res.InsertedID})
 }
 
+// handleFileUpload processes file uploads and updates the entry accordingly.
+// Returns (handled, error): handled=true if file upload was processed, false otherwise.
+func handleFileUpload(c *gin.Context, entry *models.ClipboardEntry) (bool, error) {
+	_, fileHeader, err := c.Request.FormFile("file")
+	if err == nil && fileHeader != nil {
+		entry.Type = "file"
+		entry.Filename = fileHeader.Filename
+
+		dst := fmt.Sprintf("./uploads/%s", fileHeader.Filename)
+		if err := c.SaveUploadedFile(fileHeader, dst); err != nil {
+			return true, fmt.Errorf("Failed to save file")
+		}
+		entry.Filepath = dst
+		return true, nil
+	}
+	return false, nil
+}
+
+// encrypts the entry content if required, and handles error responses.
+func handleEncryption(entry *models.ClipboardEntry, c *gin.Context) error {
+	if entry.EncryptionKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Encryption key is required for encrypted entries"})
+		return fmt.Errorf("encryption key required")
+	}
+
+	key, err := base64.StdEncoding.DecodeString(entry.EncryptionKey)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid encryption key format"})
+		return err
+	}
+
+	encryptedContent, err := encryption.Encrypt([]byte(entry.Content), key)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt content"})
+		return err
+	}
+	entry.Content = encryptedContent
+	entry.EncryptionKey = ""
+	return nil
+}
 
 func PasteClipboard(c *gin.Context) {
 	userCtx, exists := c.Get("user")
@@ -190,11 +233,6 @@ func GetClipboardEntryByID(c *gin.Context) {
 	c.JSON(http.StatusOK, entry)
 }
 
-type UpdateClipboardEntryPayload struct {
-	Content *string `json:"content"`
-	Pinned  *bool   `json:"pinned"`
-}
-
 func UpdateClipboardEntry(c *gin.Context) {
 	userCtx, exists := c.Get("user")
 	if !exists {
@@ -215,7 +253,7 @@ func UpdateClipboardEntry(c *gin.Context) {
 		return
 	}
 
-	var payload UpdateClipboardEntryPayload
+	var payload dto.UpdateClipboardEntry
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload: " + err.Error()})
 		return
@@ -248,6 +286,25 @@ func UpdateClipboardEntry(c *gin.Context) {
 		return
 	}
 
+	// Handle content update for encrypted entries
+	if currentEntry.Encrypted && payload.Content != nil {
+		encryptionKey := c.PostForm("encryption_key")
+		if encryptionKey == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Encryption key is required to update encrypted content"})
+			return
+		}
+
+		// Prepare a temp entry for encryption
+		tempEntry := currentEntry
+		tempEntry.Content = *payload.Content
+		tempEntry.EncryptionKey = encryptionKey
+
+		if err := handleEncryption(&tempEntry, c); err != nil {
+			return
+		}
+
+		*payload.Content = tempEntry.Content
+	}
 
 	updateFields := bson.M{}
 	if payload.Content != nil {
@@ -313,4 +370,3 @@ func DeleteClipboardEntry(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "Clipboard entry deleted successfully"})
 }
-
