@@ -10,9 +10,12 @@ import (
 	"clipMan/config"
 	"clipMan/database"
 	"clipMan/routes"
+	"clipMan/utils"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
+	"github.com/go-playground/validator/v10"
 )
 
 func main() {
@@ -25,6 +28,9 @@ func main() {
 	}
 
 	r := gin.Default()
+	if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
+		v.RegisterValidation("encryptionKey", utils.ValidateEncryptionKey)
+	}
 
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"}, // Allow all domains
