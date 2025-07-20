@@ -15,4 +15,6 @@ type ClipboardEntry struct {
 	Filepath      string             `json:"filepath,omitempty"`
 	UserId        primitive.ObjectID `json:"user_id" bson:"user_id"`
 	Pinned        bool               `json:"pinned" bson:"pinned,omitempty"`
+	Encrypted     bool               `json:"encrypted" bson:"encrypted,omitempty"`
+	EncryptionKey string             `json:"encryption_key,omitempty" bson:"encryption_key,omitempty"`
 }
