@@ -12,7 +12,7 @@ import (
 )
 
 func LoginUser(c *gin.Context) {
-    var loginData user.UserLoginDTO
+    var loginData dto.UserLoginDTO
 
     if err := c.ShouldBindJSON(&loginData); err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
