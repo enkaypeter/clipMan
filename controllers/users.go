@@ -3,7 +3,7 @@ package controllers
 import (
 	"clipMan/dto/user"
 	"clipMan/models"
-	"log"
+	"clipMan/api"
 
 	"clipMan/services"
 	"net/http"
@@ -11,41 +11,77 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+type LoginResponse struct {
+	User struct {
+		Username string `json:"username"`
+		Email    string `json:"email"`
+	} `json:"user"`
+	Token string `json:"token"`
+}
+
 func LoginUser(c *gin.Context) {
-    var loginData user.UserLoginDTO
+	var loginData user.UserLoginDTO
 
-    if err := c.ShouldBindJSON(&loginData); err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-        return
-    }
+	if err := c.ShouldBindJSON(&loginData); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
-    userService := services.UserService{}
+	userService := services.UserService{}
 
-    token, err := userService.LoginUser(loginData.Username, loginData.Password)
+    loggedUser, err := userService.LoginUser(loginData.Username, loginData.Password)
     if err != nil {
-        log.Println("Login error:", err)
-        c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
-        return
+        if err.Error() == "invalid credentials" {
+            api.ErrResponse[error](c, http.StatusUnauthorized, err.Error())
+            return
+        }
+
+        api.ErrResponse[error](c, http.StatusBadRequest, err.Error())
     }
 
-    c.JSON(http.StatusOK, gin.H{"token": token})
+	responseObject := &LoginResponse{
+		User: struct {
+			Username string `json:"username"`
+			Email    string `json:"email"`
+		}{
+			Username: loggedUser.User.Username,
+			Email:    loggedUser.User.Email,
+		},
+		Token: loggedUser.Token,
+	}
+
+	api.SuccessResponse(c, responseObject, api.StringPtr("Login successful"))
 }
 
 func RegisterUser(c *gin.Context) {
-    var user models.User
+	var user models.User
 
-    if err := c.ShouldBindJSON(&user); err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if err := c.ShouldBindJSON(&user); err != nil {
+        api.ErrResponse[error](c, http.StatusBadRequest, err.Error())
         return
+	}
+
+	userService := services.UserService{}
+	if err := userService.RegisterUser(user); err != nil {
+        api.ErrResponse[error](c, http.StatusInternalServerError, err.Error())
+        return
+	}
+
+    loggedUser, err := userService.LoginUser(user.Username, user.Password)
+    if err != nil {
+        api.ErrResponse[error](c, http.StatusBadRequest, err.Error())
     }
 
-    userService := services.UserService{}
+    responseObject := &LoginResponse{
+		User: struct {
+			Username string `json:"username"`
+			Email    string `json:"email"`
+		}{
+			Username: loggedUser.User.Username,
+			Email:    loggedUser.User.Email,
+		},
+		Token: loggedUser.Token,
+	}
 
-    if err := userService.RegisterUser(user); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-        return
-    }
-
-    c.JSON(http.StatusCreated, gin.H{"message": "User registered successfully"})
+    api.SuccessResponse(c, responseObject, api.StringPtr("User registered successfully"))
 }
-
