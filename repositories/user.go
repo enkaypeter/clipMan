@@ -12,6 +12,13 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
+func appendOR(m map[string]interface{}) bson.M {
+	or := make([]bson.M, 0, len(m))
+	for k, v := range m {
+		or = append(or, bson.M{k: v})
+	}
+	return bson.M{"$or": or}
+}
 
 func GetUser(filters map[string]interface{}) (*models.User, error) {
     var user models.User
@@ -47,6 +54,22 @@ func GetUser(filters map[string]interface{}) (*models.User, error) {
     log.Printf("GetUser: Found user: %+v", user.ID.Hex())
     return &user, nil
 }
+
+func GetExistingUser(filters map[string]interface{}) (*models.User, error) {
+    var user models.User
+
+    userCollection := database.GetCollection(config.DB_Collection.Users)
+    err := userCollection.FindOne(context.Background(), appendOR(filters)).Decode(&user)
+    if err == mongo.ErrNoDocuments {
+        return nil, nil
+    }
+    if err != nil {
+        log.Println("Error fetching user:", err)
+        return nil, err
+    }
+    return &user, nil
+}
+
 
 func CreateUser(user models.User) error {
     userCollection := database.GetCollection(config.DB_Collection.Users)
