@@ -140,7 +140,7 @@ func PasteClipboard(c *gin.Context) {
 
 	skip := (page - 1) * limit
 
-	filter := bson.D{{"user_id", authenticatedUser.ID}}
+	filter := bson.D{{Key: "user_id", Value: authenticatedUser.ID}}
 
 	// Get total count for pagination
 	totalEntries, err := collection.CountDocuments(context.TODO(), filter)
@@ -151,7 +151,7 @@ func PasteClipboard(c *gin.Context) {
 
 	// Retrieve entries with pagination
 	findOptions := options.Find()
-	findOptions.SetSort(bson.D{{"timestamp", -1}}) // Sort by timestamp descending
+	findOptions.SetSort(bson.D{{Key: "timestamp", Value: -1}}) // Sort by timestamp descending
 	findOptions.SetSkip(skip)
 	findOptions.SetLimit(limit)
 
