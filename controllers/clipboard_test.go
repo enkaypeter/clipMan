@@ -15,10 +15,13 @@ import (
 	"testing"
 	"time"
 
+	"clipMan/authprovider"
 	"clipMan/config"
+	usercontrollers "clipMan/controllers"
 	"clipMan/database"
 	"clipMan/models"
 	"clipMan/routes"
+	"clipMan/services"
 	"clipMan/utils"
 
 	"github.com/gin-gonic/gin"
@@ -35,6 +38,29 @@ type ClipboardTestSuite struct {
 	TestUser       *models.User
 	AuthToken      string
 	OriginalDBName string
+	AuthProvider   *fakeAuthProvider
+}
+
+type fakeAuthProvider struct {
+	startedEmail string
+}
+
+func (provider *fakeAuthProvider) Name() string { return authprovider.WorkOS }
+
+func (provider *fakeAuthProvider) StartMagicAuth(_ context.Context, email string, _ authprovider.RequestContext) error {
+	provider.startedEmail = email
+	return nil
+}
+
+func (provider *fakeAuthProvider) VerifyMagicAuth(_ context.Context, email, code string, _ authprovider.RequestContext) (*authprovider.User, error) {
+	if code != "123456" {
+		return nil, fmt.Errorf("invalid code")
+	}
+	return &authprovider.User{
+		Subject:       "workos-" + email,
+		Email:         email,
+		EmailVerified: true,
+	}, nil
 }
 
 // SetupSuite runs once before all tests in the suite
@@ -57,6 +83,7 @@ func (suite *ClipboardTestSuite) SetupSuite() {
 	gin.SetMode(gin.TestMode)
 	suite.Router = gin.New()
 	routes.SetupClipboardRoutes(suite.Router)
+	routes.SetupUserRoutes(suite.Router)
 }
 
 func (suite *ClipboardTestSuite) TearDownSuite() {
@@ -73,6 +100,9 @@ func (suite *ClipboardTestSuite) SetupTest() {
 	suite.Require().NoError(err)
 	err = client.Database("clipboardDB_test").Drop(context.Background())
 	suite.Require().NoError(err)
+	suite.Require().NoError(database.EnsureIndexes(context.Background()))
+	suite.AuthProvider = &fakeAuthProvider{}
+	usercontrollers.ConfigureAuthService(services.NewAuthService(suite.AuthProvider))
 
 	suite.TestUser = suite.createTestUser("testuser", "test@example.com", "password123")
 	suite.AuthToken, err = utils.GenerateJWT(suite.TestUser)
@@ -80,16 +110,121 @@ func (suite *ClipboardTestSuite) SetupTest() {
 	log.Println("Generated AuthToken:", suite.AuthToken)
 }
 
+func (suite *ClipboardTestSuite) TestMagicAuthCreatesAccountAndSession() {
+	start := suite.makeJSONRequest(http.MethodPost, "/auth/magic/start", "", map[string]string{
+		"email": "  NEW.User@Example.com ",
+	})
+	suite.Equal(http.StatusAccepted, start.Code)
+	suite.Equal("new.user@example.com", suite.AuthProvider.startedEmail)
+
+	verify := suite.makeJSONRequest(http.MethodPost, "/auth/magic/verify", "", map[string]string{
+		"email": "new.user@example.com",
+		"code":  "123456",
+	})
+	suite.Equal(http.StatusOK, verify.Code, verify.Body.String())
+	cookies := verify.Result().Cookies()
+	suite.Require().NotEmpty(cookies)
+
+	me := suite.makeRequest(http.MethodGet, "/api/account/me", "", nil, map[string]string{
+		"Cookie": cookies[0].Name + "=" + cookies[0].Value,
+	})
+	suite.Equal(http.StatusOK, me.Code, me.Body.String())
+	suite.Contains(me.Body.String(), `"email":"new.user@example.com"`)
+	suite.Contains(me.Body.String(), `"emailVerified":true`)
+}
+
+func (suite *ClipboardTestSuite) TestMagicAuthReusesExistingIdentity() {
+	first := suite.makeJSONRequest(http.MethodPost, "/auth/magic/verify", "", map[string]string{
+		"email": "repeat@example.com", "code": "123456",
+	})
+	second := suite.makeJSONRequest(http.MethodPost, "/auth/magic/verify", "", map[string]string{
+		"email": "repeat@example.com", "code": "123456",
+	})
+	suite.Equal(http.StatusOK, first.Code)
+	suite.Equal(http.StatusOK, second.Code)
+
+	var firstPayload, secondPayload struct {
+		User models.User `json:"user"`
+	}
+	suite.Require().NoError(json.Unmarshal(first.Body.Bytes(), &firstPayload))
+	suite.Require().NoError(json.Unmarshal(second.Body.Bytes(), &secondPayload))
+	suite.Equal(firstPayload.User.ID, secondPayload.User.ID)
+
+	count, err := database.GetCollection(config.DB_Collection.Users).CountDocuments(context.Background(), bson.M{"email_normalized": "repeat@example.com"})
+	suite.Require().NoError(err)
+	suite.EqualValues(1, count)
+}
+
+func (suite *ClipboardTestSuite) TestLegacyUserCanLinkEmailAndThenUseOTP() {
+	start := suite.makeJSONRequest(http.MethodPost, "/api/account/email-link/start", suite.AuthToken, map[string]string{
+		"email": "linked@example.com",
+	})
+	suite.Equal(http.StatusAccepted, start.Code, start.Body.String())
+
+	confirm := suite.makeJSONRequest(http.MethodPost, "/api/account/email-link/confirm", suite.AuthToken, map[string]string{
+		"code": "123456",
+	})
+	suite.Equal(http.StatusOK, confirm.Code, confirm.Body.String())
+	suite.Contains(confirm.Body.String(), `"emailVerified":true`)
+
+	magicLogin := suite.makeJSONRequest(http.MethodPost, "/auth/magic/verify", "", map[string]string{
+		"email": "linked@example.com", "code": "123456",
+	})
+	suite.Equal(http.StatusOK, magicLogin.Code, magicLogin.Body.String())
+	suite.Contains(magicLogin.Body.String(), suite.TestUser.ID.Hex())
+
+	legacyLogin := suite.makeJSONRequest(http.MethodPost, "/login", "", map[string]string{
+		"username": "testuser", "password": "password123",
+	})
+	suite.Equal(http.StatusUnauthorized, legacyLogin.Code)
+}
+
+func (suite *ClipboardTestSuite) TestEmailCannotBeLinkedToTwoAccounts() {
+	start := suite.makeJSONRequest(http.MethodPost, "/api/account/email-link/start", suite.AuthToken, map[string]string{"email": "owned@example.com"})
+	suite.Equal(http.StatusAccepted, start.Code)
+	confirm := suite.makeJSONRequest(http.MethodPost, "/api/account/email-link/confirm", suite.AuthToken, map[string]string{"code": "123456"})
+	suite.Equal(http.StatusOK, confirm.Code)
+
+	otherUser := suite.createTestUser("otheruser", "", "password123")
+	otherToken, err := utils.GenerateJWT(otherUser)
+	suite.Require().NoError(err)
+	conflict := suite.makeJSONRequest(http.MethodPost, "/api/account/email-link/start", otherToken, map[string]string{"email": "owned@example.com"})
+	suite.Equal(http.StatusConflict, conflict.Code, conflict.Body.String())
+}
+
+func (suite *ClipboardTestSuite) TestInvalidMagicCodeDoesNotCreateAccount() {
+	response := suite.makeJSONRequest(http.MethodPost, "/auth/magic/verify", "", map[string]string{
+		"email": "invalid@example.com", "code": "000000",
+	})
+	suite.Equal(http.StatusUnauthorized, response.Code)
+	count, err := database.GetCollection(config.DB_Collection.Users).CountDocuments(context.Background(), bson.M{"email_normalized": "invalid@example.com"})
+	suite.Require().NoError(err)
+	suite.Zero(count)
+}
+
+func (suite *ClipboardTestSuite) TestLegacyRegistrationIsDisabled() {
+	response := suite.makeJSONRequest(http.MethodPost, "/register", "", map[string]string{
+		"username": "new-legacy-user", "password": "password123",
+	})
+	suite.Equal(http.StatusNotFound, response.Code)
+}
+
+func (suite *ClipboardTestSuite) makeJSONRequest(method, url, token string, payload interface{}) *httptest.ResponseRecorder {
+	body, err := json.Marshal(payload)
+	suite.Require().NoError(err)
+	return suite.makeRequest(method, url, token, bytes.NewReader(body), map[string]string{"Content-Type": "application/json"})
+}
+
 func (suite *ClipboardTestSuite) createTestUser(username, email, password string) *models.User {
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	suite.Require().NoError(err)
 
 	user := &models.User{
-		ID:        primitive.NewObjectID(),
-		Username:  username,
-		Email:     email,
-		Password:  string(hashedPassword),
-		CreatedAt: time.Now(),
+		ID:           primitive.NewObjectID(),
+		Username:     username,
+		Email:        email,
+		PasswordHash: string(hashedPassword),
+		CreatedAt:    time.Now(),
 	}
 
 	collection := database.GetCollection(config.DB_Collection.Users)

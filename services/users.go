@@ -4,7 +4,6 @@ import (
 	"clipMan/models"
 	"clipMan/repositories"
 	"clipMan/utils"
-
 	"errors"
 
 	"golang.org/x/crypto/bcrypt"
@@ -12,46 +11,24 @@ import (
 
 type UserService struct{}
 
-func (us *UserService) RegisterUser(user models.User) error {
-    existingUser, err := repositories.GetUserByUsername(user.Username)
-    if err != nil {
-        return err
-    }
-    
-    if existingUser != nil {
-        return errors.New("username already taken")
-    }
-
-    hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+func (us *UserService) LoginUser(username, password string) (string, *models.User, error) {
+	user, err := repositories.GetUserByUsername(username)
 	if err != nil {
-		return err
+		return "", nil, err
 	}
-	user.Password = string(hashedPassword)
+	if user == nil {
+		return "", nil, errors.New("invalid username")
+	}
+	if user.EmailVerified {
+		return "", nil, errors.New("use email authentication for this account")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		return "", nil, errors.New("invalid username or password")
+	}
 
-    err = repositories.CreateUser(user)
-    return err
-}
-
-func (us *UserService) LoginUser(username, password string) (string, error) {
-    user, err := repositories.GetUserByUsername(username)
-    if err != nil {
-        return "", err
-    }
-
-    if user == nil {
-        return "", errors.New("invalid username")
-    }
-
-    err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
-    if err != nil {
-        return "", errors.New("invalid username or password")
-    }
-
-    token, err := utils.GenerateJWT(user)
-
-    if err != nil {
-        return "", err
-    }
-
-    return token, nil
+	token, err := utils.GenerateJWT(user)
+	if err != nil {
+		return "", nil, err
+	}
+	return token, user, nil
 }

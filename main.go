@@ -7,9 +7,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	"clipMan/authprovider"
 	"clipMan/config"
+	"clipMan/controllers"
 	"clipMan/database"
 	"clipMan/routes"
+	"clipMan/services"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -24,10 +27,18 @@ func main() {
 		log.Fatalf("❌ MongoDB Connection Error: %v", err)
 	}
 
+	if appConfig.WorkOSAPIKey != "" && appConfig.WorkOSClientID != "" {
+		controllers.ConfigureAuthService(services.NewAuthService(
+			authprovider.NewWorkOS(appConfig.WorkOSAPIKey, appConfig.WorkOSClientID),
+		))
+	} else {
+		log.Println("⚠️ WorkOS email authentication is disabled; set WORKOS_API_KEY and WORKOS_CLIENT_ID to enable it")
+	}
+
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"}, // Allow all domains
+		AllowOrigins:     appConfig.CORSAllowOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
