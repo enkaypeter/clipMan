@@ -2,9 +2,11 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"clipMan/config"
@@ -17,9 +19,27 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+var editableEntryTypes = map[string]struct{}{
+	"note":  {},
+	"url":   {},
+	"code":  {},
+	"color": {},
+}
+
+func isEditableEntryType(entryType string) bool {
+	_, ok := editableEntryTypes[entryType]
+	return ok
+}
+
+func isCreateEntryType(entryType string) bool {
+	// "text" remains valid for older clients. New clients persist a specific
+	// editable type such as note, URL, code, or color.
+	return entryType == "text" || isEditableEntryType(entryType)
+}
 
 func CopyClipboard(c *gin.Context) {
 
@@ -35,11 +55,11 @@ func CopyClipboard(c *gin.Context) {
 
 	authUser, ok := user.(*models.User)
 	if !ok {
-    log.Println("Error casting user from context")
-    c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user data"})
-    c.Abort()
-    return
-}
+		log.Println("Error casting user from context")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user data"})
+		c.Abort()
+		return
+	}
 	_, fileHeader, err := c.Request.FormFile("file")
 	if err == nil && fileHeader != nil {
 		entry.Type = "file"
@@ -59,25 +79,36 @@ func CopyClipboard(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		entry.Type = "text"
+
+		entry.Type = strings.ToLower(strings.TrimSpace(entry.Type))
+		if entry.Type == "" {
+			entry.Type = "text"
+		}
+		if !isCreateEntryType(entry.Type) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid entry type"})
+			return
+		}
+
+		entry.Title = strings.TrimSpace(entry.Title)
+		if strings.TrimSpace(entry.Content) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Content is required"})
+			return
+		}
 	}
 
 	entry.Timestamp = time.Now()
 	entry.UserId = authUser.ID
 
-
 	collection := database.GetCollection(config.DB_Collection.Entries)
-	
+
 	res, err := collection.InsertOne(context.TODO(), entry)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-
 	c.JSON(http.StatusCreated, gin.H{"id": res.InsertedID})
 }
-
 
 func PasteClipboard(c *gin.Context) {
 	userCtx, exists := c.Get("user")
@@ -191,8 +222,74 @@ func GetClipboardEntryByID(c *gin.Context) {
 }
 
 type UpdateClipboardEntryPayload struct {
+	Type    *string `json:"type"`
+	Title   *string `json:"title"`
 	Content *string `json:"content"`
 	Pinned  *bool   `json:"pinned"`
+}
+
+type normalizedClipboardUpdate struct {
+	entryType string
+	content   string
+}
+
+func validateUpdatePayload(payload UpdateClipboardEntryPayload) (normalizedClipboardUpdate, error) {
+	if payload.Type == nil && payload.Title == nil && payload.Content == nil && payload.Pinned == nil {
+		return normalizedClipboardUpdate{}, errors.New("No update fields provided")
+	}
+
+	normalized := normalizedClipboardUpdate{}
+	if payload.Type != nil {
+		normalized.entryType = strings.ToLower(strings.TrimSpace(*payload.Type))
+		if !isEditableEntryType(normalized.entryType) {
+			return normalizedClipboardUpdate{}, errors.New("Invalid entry type")
+		}
+	}
+
+	if payload.Content != nil {
+		normalized.content = *payload.Content
+		if strings.TrimSpace(normalized.content) == "" {
+			return normalizedClipboardUpdate{}, errors.New("Content is required")
+		}
+	}
+
+	return normalized, nil
+}
+
+func validateEntryUpdate(currentEntry models.ClipboardEntry, payload UpdateClipboardEntryPayload) error {
+	if currentEntry.Type != "file" {
+		return nil
+	}
+	if payload.Content != nil {
+		return errors.New("Cannot update content of a file entry")
+	}
+	if payload.Type != nil {
+		return errors.New("Cannot change the type of a file entry")
+	}
+
+	return nil
+}
+
+func buildUpdateFields(payload UpdateClipboardEntryPayload, normalized normalizedClipboardUpdate, now time.Time) bson.M {
+	updateFields := bson.M{}
+
+	if payload.Type != nil {
+		updateFields["type"] = normalized.entryType
+	}
+	if payload.Title != nil {
+		updateFields["title"] = strings.TrimSpace(*payload.Title)
+	}
+	if payload.Content != nil {
+		updateFields["content"] = normalized.content
+	}
+	if payload.Pinned != nil {
+		updateFields["pinned"] = *payload.Pinned
+	}
+	if payload.Type != nil || payload.Title != nil || payload.Content != nil {
+		updateFields["timestamp"] = now
+	}
+
+	return updateFields
 }
 
 func UpdateClipboardEntry(c *gin.Context) {
@@ -221,9 +318,9 @@ func UpdateClipboardEntry(c *gin.Context) {
 		return
 	}
 
-	// Ensure at least one field is being updated
-	if payload.Content == nil && payload.Pinned == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No update fields provided"})
+	normalized, err := validateUpdatePayload(payload)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -234,7 +331,7 @@ func UpdateClipboardEntry(c *gin.Context) {
 	filter := bson.M{"_id": entryID, "user_id": authenticatedUser.ID}
 	err = collection.FindOne(context.TODO(), filter).Decode(&currentEntry)
 	if err != nil {
-		if err.Error() == "mongo: no documents in result" {
+		if errors.Is(err, mongo.ErrNoDocuments) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Clipboard entry not found or access denied"})
 			return
 		}
@@ -242,22 +339,12 @@ func UpdateClipboardEntry(c *gin.Context) {
 		return
 	}
 
-	// Prevent updating fields of a "file" type entry, except for 'pinned'
-	if currentEntry.Type == "file" && payload.Content != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot update content of a file entry. You can only pin/unpin it."})
+	if err := validateEntryUpdate(currentEntry, payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-
-	updateFields := bson.M{}
-	if payload.Content != nil {
-		updateFields["content"] = *payload.Content
-		updateFields["timestamp"] = time.Now()
-	}
-	if payload.Pinned != nil {
-		updateFields["pinned"] = *payload.Pinned
-	}
-
+	updateFields := buildUpdateFields(payload, normalized, time.Now())
 	update := bson.M{"$set": updateFields}
 
 	_, err = collection.UpdateOne(context.TODO(), filter, update)
@@ -313,4 +400,3 @@ func DeleteClipboardEntry(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "Clipboard entry deleted successfully"})
 }
-
