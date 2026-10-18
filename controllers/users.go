@@ -155,7 +155,7 @@ func providerRequest(c *gin.Context) authprovider.RequestContext {
 }
 
 func setSessionCookie(c *gin.Context, token string) {
-	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetSameSite(config.AppConfig.SessionCookieSameSite)
 	c.SetCookie(
 		config.AppConfig.SessionCookieName,
 		token,
@@ -168,7 +168,7 @@ func setSessionCookie(c *gin.Context, token string) {
 }
 
 func clearSessionCookie(c *gin.Context) {
-	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetSameSite(config.AppConfig.SessionCookieSameSite)
 	c.SetCookie(config.AppConfig.SessionCookieName, "", -1, "/", "", config.AppConfig.SessionCookieSecure, true)
 }
 
