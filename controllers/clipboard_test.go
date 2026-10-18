@@ -133,6 +133,53 @@ func (suite *ClipboardTestSuite) TestMagicAuthCreatesAccountAndSession() {
 	suite.Contains(me.Body.String(), `"emailVerified":true`)
 }
 
+func (suite *ClipboardTestSuite) TestSessionCookieUsesConfiguredAttributes() {
+	originalSameSite := config.AppConfig.SessionCookieSameSite
+	originalSecure := config.AppConfig.SessionCookieSecure
+	config.AppConfig.SessionCookieSameSite = http.SameSiteNoneMode
+	config.AppConfig.SessionCookieSecure = true
+	defer func() {
+		config.AppConfig.SessionCookieSameSite = originalSameSite
+		config.AppConfig.SessionCookieSecure = originalSecure
+	}()
+
+	verify := suite.makeJSONRequest(http.MethodPost, "/auth/magic/verify", "", map[string]string{
+		"email": "cookie@example.com",
+		"code":  "123456",
+	})
+	suite.Equal(http.StatusOK, verify.Code, verify.Body.String())
+
+	var sessionCookie *http.Cookie
+	for _, cookie := range verify.Result().Cookies() {
+		if cookie.Name == config.AppConfig.SessionCookieName {
+			sessionCookie = cookie
+			break
+		}
+	}
+	suite.Require().NotNil(sessionCookie)
+	suite.Equal(http.SameSiteNoneMode, sessionCookie.SameSite)
+	suite.True(sessionCookie.Secure)
+	suite.True(sessionCookie.HttpOnly)
+
+	logout := suite.makeRequest(http.MethodPost, "/auth/logout", "", nil, map[string]string{
+		"Cookie": sessionCookie.Name + "=" + sessionCookie.Value,
+	})
+	suite.Equal(http.StatusNoContent, logout.Code, logout.Body.String())
+
+	var clearedCookie *http.Cookie
+	for _, cookie := range logout.Result().Cookies() {
+		if cookie.Name == config.AppConfig.SessionCookieName {
+			clearedCookie = cookie
+			break
+		}
+	}
+	suite.Require().NotNil(clearedCookie)
+	suite.Equal(http.SameSiteNoneMode, clearedCookie.SameSite)
+	suite.True(clearedCookie.Secure)
+	suite.True(clearedCookie.HttpOnly)
+	suite.Less(clearedCookie.MaxAge, 0)
+}
+
 func (suite *ClipboardTestSuite) TestMagicAuthReusesExistingIdentity() {
 	first := suite.makeJSONRequest(http.MethodPost, "/auth/magic/verify", "", map[string]string{
 		"email": "repeat@example.com", "code": "123456",
