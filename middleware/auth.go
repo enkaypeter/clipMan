@@ -16,7 +16,6 @@ import (
 
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Get token from Authorization header
 		tokenString := c.GetHeader("Authorization")
 		if tokenString == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization token required"})
@@ -24,9 +23,7 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Token format is "Bearer token", so we split the string
 		parts := strings.Split(tokenString, " ")
-		
 		if len(parts) != 2 || parts[0] != "Bearer" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token format"})
 			c.Abort()
@@ -34,7 +31,6 @@ func AuthMiddleware() gin.HandlerFunc {
 		}
 		tokenString = parts[1]
 
-		// Parse and validate the token
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method %v", token.Header["alg"])
@@ -49,7 +45,6 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Extract the claims and attach the user information to the request context
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok || !token.Valid {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
@@ -72,15 +67,11 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 	}
 
-		// Store user info in the context for downstream handlers
 		c.Set("user", user)
-
-		// Proceed to the next middleware or handler
 		c.Next()
 	}
 }
 
-// Helper function to get user by ID (you can replace this with your own implementation)
 func getUserById(userId string) (*models.User, error) {	
 	dbFilter := map[string]interface{}{"_id": userId}
 	user, err := repositories.GetUser(dbFilter) 

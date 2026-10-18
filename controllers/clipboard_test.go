@@ -31,9 +31,9 @@ import (
 // ClipboardTestSuite holds the state for the test suite
 type ClipboardTestSuite struct {
 	suite.Suite
-	Router    *gin.Engine
-	TestUser  *models.User
-	AuthToken string
+	Router         *gin.Engine
+	TestUser       *models.User
+	AuthToken      string
 	OriginalDBName string
 }
 
@@ -126,12 +126,12 @@ func TestClipboardTestSuite(t *testing.T) {
 	suite.Run(t, new(ClipboardTestSuite))
 }
 
-
 // --- Example: Test POST /api/clipboard - Create Text Clip ---
 func (suite *ClipboardTestSuite) TestCreateTextClip_Success() {
 	payload := gin.H{
-		"content": "This is a test text clip",
-		"type": "text",
+		"content": "This is a test note",
+		"title":   "Test Note",
+		"type":    "note",
 	}
 	jsonPayload, _ := json.Marshal(payload)
 
@@ -152,8 +152,9 @@ func (suite *ClipboardTestSuite) TestCreateTextClip_Success() {
 	entryCollection := database.GetCollection(config.DB_Collection.Entries)
 	err = entryCollection.FindOne(context.Background(), bson.M{"_id": clipID, "user_id": suite.TestUser.ID}).Decode(&createdEntry)
 	suite.NoError(err, "Created entry not found in DB or does not belong to test user")
-	suite.Equal("This is a test text clip", createdEntry.Content)
-	suite.Equal("text", createdEntry.Type)
+	suite.Equal("This is a test note", createdEntry.Content)
+	suite.Equal("Test Note", createdEntry.Title)
+	suite.Equal("note", createdEntry.Type)
 }
 
 func (suite *ClipboardTestSuite) TestCreateTextClip_Unauthorized() {
@@ -165,7 +166,6 @@ func (suite *ClipboardTestSuite) TestCreateTextClip_Unauthorized() {
 	rr := suite.makeRequest(http.MethodPost, "/api/clipboard", "", bytes.NewBuffer(jsonPayload), headers)
 	suite.Equal(http.StatusUnauthorized, rr.Code, "Status code should be 401 Unauthorized")
 }
-
 
 // Test POST /api/clipboard - Create File Clip
 func (suite *ClipboardTestSuite) TestCreateFileClip_Success() {
@@ -187,7 +187,6 @@ func (suite *ClipboardTestSuite) TestCreateFileClip_Success() {
 
 	_, err = io.Copy(part, file)
 	suite.Require().NoError(err)
-
 
 	err = writer.Close()
 	suite.Require().NoError(err)
@@ -260,7 +259,6 @@ func (suite *ClipboardTestSuite) TestGetClips_WithDataAndPagination() {
 	})
 	suite.Require().NoError(err)
 
-
 	// Test default pagination (page=1, limit=10)
 	rr := suite.makeRequest(http.MethodGet, "/api/clipboard", suite.AuthToken, nil, nil)
 	suite.Equal(http.StatusOK, rr.Code)
@@ -271,10 +269,9 @@ func (suite *ClipboardTestSuite) TestGetClips_WithDataAndPagination() {
 	data, ok := responseBody["data"].([]interface{})
 	suite.True(ok, "Data field is not an array")
 	suite.Len(data, 3, "Should fetch 3 entries for the authenticated user")
-	
+
 	// Check order (newest first)
 	suite.Equal("Clip 3", data[0].(map[string]interface{})["content"])
-
 
 	// Test custom pagination (page=2, limit=1)
 	rr = suite.makeRequest(http.MethodGet, "/api/clipboard?page=2&limit=1", suite.AuthToken, nil, nil)
@@ -426,7 +423,6 @@ func (suite *ClipboardTestSuite) TestUpdateClip_Fail_UpdateFileContent() {
 	suite.Equal(http.StatusBadRequest, rr.Code)
 }
 
-
 func (suite *ClipboardTestSuite) TestUpdateClip_NotFound() {
 	nonExistentID := primitive.NewObjectID()
 	updatePayload := gin.H{"content": "Doesn't matter"}
@@ -438,6 +434,209 @@ func (suite *ClipboardTestSuite) TestUpdateClip_NotFound() {
 	suite.Equal(http.StatusNotFound, rr.Code)
 }
 
+func (suite *ClipboardTestSuite) TestUpdateClip_Success_AllEditableFields() {
+	entry := models.ClipboardEntry{
+		ID:        primitive.NewObjectID(),
+		UserId:    suite.TestUser.ID,
+		Type:      "note",
+		Title:     "Original title",
+		Content:   "Original content",
+		Timestamp: time.Now().Add(-time.Hour),
+	}
+	entryCollection := database.GetCollection(config.DB_Collection.Entries)
+	_, err := entryCollection.InsertOne(context.Background(), entry)
+	suite.Require().NoError(err)
+
+	payload := gin.H{
+		"type":    "code",
+		"title":   "Updated title",
+		"content": "  const answer = 42;\n",
+	}
+	jsonPayload, _ := json.Marshal(payload)
+	url := fmt.Sprintf("/api/clipboard/%s", entry.ID.Hex())
+	rr := suite.makeRequest(http.MethodPatch, url, suite.AuthToken, bytes.NewBuffer(jsonPayload), map[string]string{"Content-Type": "application/json"})
+
+	suite.Equal(http.StatusOK, rr.Code)
+
+	var updatedEntry models.ClipboardEntry
+	suite.Require().NoError(json.Unmarshal(rr.Body.Bytes(), &updatedEntry))
+	suite.Equal("code", updatedEntry.Type)
+	suite.Equal("Updated title", updatedEntry.Title)
+	suite.Equal("  const answer = 42;\n", updatedEntry.Content)
+	suite.True(updatedEntry.Timestamp.After(entry.Timestamp))
+
+	var dbEntry models.ClipboardEntry
+	suite.Require().NoError(entryCollection.FindOne(context.Background(), bson.M{"_id": entry.ID}).Decode(&dbEntry))
+	suite.Equal(updatedEntry.Type, dbEntry.Type)
+	suite.Equal(updatedEntry.Title, dbEntry.Title)
+	suite.Equal(updatedEntry.Content, dbEntry.Content)
+}
+
+func (suite *ClipboardTestSuite) TestUpdateClip_Success_TitleOnlyPreservesOtherFields() {
+	entry := models.ClipboardEntry{
+		ID:        primitive.NewObjectID(),
+		UserId:    suite.TestUser.ID,
+		Type:      "url",
+		Title:     "Old title",
+		Content:   "https://example.com",
+		Timestamp: time.Now().Add(-time.Hour),
+	}
+	entryCollection := database.GetCollection(config.DB_Collection.Entries)
+	_, err := entryCollection.InsertOne(context.Background(), entry)
+	suite.Require().NoError(err)
+
+	jsonPayload, _ := json.Marshal(gin.H{"title": "New title"})
+	url := fmt.Sprintf("/api/clipboard/%s", entry.ID.Hex())
+	rr := suite.makeRequest(http.MethodPatch, url, suite.AuthToken, bytes.NewBuffer(jsonPayload), map[string]string{"Content-Type": "application/json"})
+
+	suite.Equal(http.StatusOK, rr.Code)
+
+	var updatedEntry models.ClipboardEntry
+	suite.Require().NoError(json.Unmarshal(rr.Body.Bytes(), &updatedEntry))
+	suite.Equal("New title", updatedEntry.Title)
+	suite.Equal(entry.Type, updatedEntry.Type)
+	suite.Equal(entry.Content, updatedEntry.Content)
+}
+
+func (suite *ClipboardTestSuite) TestUpdateClip_Success_TypeOnlyPreservesOtherFields() {
+	entry := models.ClipboardEntry{
+		ID:        primitive.NewObjectID(),
+		UserId:    suite.TestUser.ID,
+		Type:      "note",
+		Title:     "Keep this title",
+		Content:   "#ff00aa",
+		Timestamp: time.Now().Add(-time.Hour),
+	}
+	entryCollection := database.GetCollection(config.DB_Collection.Entries)
+	_, err := entryCollection.InsertOne(context.Background(), entry)
+	suite.Require().NoError(err)
+
+	jsonPayload, _ := json.Marshal(gin.H{"type": "color"})
+	url := fmt.Sprintf("/api/clipboard/%s", entry.ID.Hex())
+	rr := suite.makeRequest(http.MethodPatch, url, suite.AuthToken, bytes.NewBuffer(jsonPayload), map[string]string{"Content-Type": "application/json"})
+
+	suite.Equal(http.StatusOK, rr.Code)
+
+	var updatedEntry models.ClipboardEntry
+	suite.Require().NoError(json.Unmarshal(rr.Body.Bytes(), &updatedEntry))
+	suite.Equal("color", updatedEntry.Type)
+	suite.Equal(entry.Title, updatedEntry.Title)
+	suite.Equal(entry.Content, updatedEntry.Content)
+}
+
+func (suite *ClipboardTestSuite) TestUpdateClip_RejectsInvalidTypeWithoutMutation() {
+	entry := models.ClipboardEntry{
+		ID:      primitive.NewObjectID(),
+		UserId:  suite.TestUser.ID,
+		Type:    "note",
+		Title:   "Original title",
+		Content: "Original content",
+	}
+	entryCollection := database.GetCollection(config.DB_Collection.Entries)
+	_, err := entryCollection.InsertOne(context.Background(), entry)
+	suite.Require().NoError(err)
+
+	jsonPayload, _ := json.Marshal(gin.H{"type": "video"})
+	url := fmt.Sprintf("/api/clipboard/%s", entry.ID.Hex())
+	rr := suite.makeRequest(http.MethodPatch, url, suite.AuthToken, bytes.NewBuffer(jsonPayload), map[string]string{"Content-Type": "application/json"})
+
+	suite.Equal(http.StatusBadRequest, rr.Code)
+
+	var dbEntry models.ClipboardEntry
+	suite.Require().NoError(entryCollection.FindOne(context.Background(), bson.M{"_id": entry.ID}).Decode(&dbEntry))
+	suite.Equal(entry.Type, dbEntry.Type)
+	suite.Equal(entry.Title, dbEntry.Title)
+	suite.Equal(entry.Content, dbEntry.Content)
+}
+
+func (suite *ClipboardTestSuite) TestUpdateClip_RejectsBlankContentWithoutMutation() {
+	entry := models.ClipboardEntry{
+		ID:      primitive.NewObjectID(),
+		UserId:  suite.TestUser.ID,
+		Type:    "note",
+		Title:   "Original title",
+		Content: "Original content",
+	}
+	entryCollection := database.GetCollection(config.DB_Collection.Entries)
+	_, err := entryCollection.InsertOne(context.Background(), entry)
+	suite.Require().NoError(err)
+
+	jsonPayload, _ := json.Marshal(gin.H{"content": "   \n\t"})
+	url := fmt.Sprintf("/api/clipboard/%s", entry.ID.Hex())
+	rr := suite.makeRequest(http.MethodPatch, url, suite.AuthToken, bytes.NewBuffer(jsonPayload), map[string]string{"Content-Type": "application/json"})
+
+	suite.Equal(http.StatusBadRequest, rr.Code)
+
+	var dbEntry models.ClipboardEntry
+	suite.Require().NoError(entryCollection.FindOne(context.Background(), bson.M{"_id": entry.ID}).Decode(&dbEntry))
+	suite.Equal(entry.Content, dbEntry.Content)
+}
+
+func (suite *ClipboardTestSuite) TestUpdateClip_RejectsNoEditableFields() {
+	entry := models.ClipboardEntry{
+		ID:      primitive.NewObjectID(),
+		UserId:  suite.TestUser.ID,
+		Type:    "note",
+		Content: "Original content",
+	}
+	entryCollection := database.GetCollection(config.DB_Collection.Entries)
+	_, err := entryCollection.InsertOne(context.Background(), entry)
+	suite.Require().NoError(err)
+
+	jsonPayload, _ := json.Marshal(gin.H{"device": "desktop"})
+	url := fmt.Sprintf("/api/clipboard/%s", entry.ID.Hex())
+	rr := suite.makeRequest(http.MethodPatch, url, suite.AuthToken, bytes.NewBuffer(jsonPayload), map[string]string{"Content-Type": "application/json"})
+
+	suite.Equal(http.StatusBadRequest, rr.Code)
+}
+
+func (suite *ClipboardTestSuite) TestUpdateClip_OtherUsersEntryIsNotFoundAndUnchanged() {
+	otherUser := suite.createTestUser("update-other-user", "update-other@example.com", "password")
+	entry := models.ClipboardEntry{
+		ID:      primitive.NewObjectID(),
+		UserId:  otherUser.ID,
+		Type:    "note",
+		Title:   "Private title",
+		Content: "Private content",
+	}
+	entryCollection := database.GetCollection(config.DB_Collection.Entries)
+	_, err := entryCollection.InsertOne(context.Background(), entry)
+	suite.Require().NoError(err)
+
+	jsonPayload, _ := json.Marshal(gin.H{"title": "Unauthorized change"})
+	url := fmt.Sprintf("/api/clipboard/%s", entry.ID.Hex())
+	rr := suite.makeRequest(http.MethodPatch, url, suite.AuthToken, bytes.NewBuffer(jsonPayload), map[string]string{"Content-Type": "application/json"})
+
+	suite.Equal(http.StatusNotFound, rr.Code)
+
+	var dbEntry models.ClipboardEntry
+	suite.Require().NoError(entryCollection.FindOne(context.Background(), bson.M{"_id": entry.ID}).Decode(&dbEntry))
+	suite.Equal(entry.Title, dbEntry.Title)
+}
+
+func (suite *ClipboardTestSuite) TestUpdateClip_RejectsFileTypeChange() {
+	entry := models.ClipboardEntry{
+		ID:       primitive.NewObjectID(),
+		UserId:   suite.TestUser.ID,
+		Type:     "file",
+		Title:    "Document",
+		Filename: "document.pdf",
+		Filepath: "/uploads/document.pdf",
+	}
+	entryCollection := database.GetCollection(config.DB_Collection.Entries)
+	_, err := entryCollection.InsertOne(context.Background(), entry)
+	suite.Require().NoError(err)
+
+	jsonPayload, _ := json.Marshal(gin.H{"type": "note"})
+	url := fmt.Sprintf("/api/clipboard/%s", entry.ID.Hex())
+	rr := suite.makeRequest(http.MethodPatch, url, suite.AuthToken, bytes.NewBuffer(jsonPayload), map[string]string{"Content-Type": "application/json"})
+
+	suite.Equal(http.StatusBadRequest, rr.Code)
+
+	var dbEntry models.ClipboardEntry
+	suite.Require().NoError(entryCollection.FindOne(context.Background(), bson.M{"_id": entry.ID}).Decode(&dbEntry))
+	suite.Equal("file", dbEntry.Type)
+}
 
 func (suite *ClipboardTestSuite) TestDeleteClip_Success() {
 	entry := models.ClipboardEntry{
