@@ -1,0 +1,42 @@
+{
+  "name": "clipman-api",
+  "main": "cloudflare/worker.js",
+  "compatibility_date": "2026-11-06",
+  "observability": {
+    "enabled": true
+  },
+  "containers": [
+    {
+      "class_name": "ClipmanContainer",
+      "image": "./Dockerfile",
+      "instance_type": "lite",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CLIPMAN",
+        "class_name": "ClipmanContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ClipmanContainer"
+      ]
+    }
+  ],
+  "vars": {
+    "MONGO_DB": "clipboardDB",
+    "APP_PORT": "8080",
+    "GIN_MODE": "release",
+    "SESSION_COOKIE_NAME": "clipman_session",
+    "SESSION_COOKIE_SECURE": "true",
+    "SESSION_COOKIE_SAME_SITE": "lax",
+    "SESSION_DURATION": "720h",
+    "CORS_ALLOW_ORIGINS": "https://clipman.xyz,https://www.clipman.xyz,https://clipman-web.enkaypeter.workers.dev"
+  }
+}
